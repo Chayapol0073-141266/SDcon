@@ -1,0 +1,9 @@
+{
+  "name": "HRM_SDcon v.1",
+  "description": "HRM Dashboard for SD Con with Orange Pastel Theme",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
