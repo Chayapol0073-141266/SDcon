@@ -2,61 +2,142 @@ import React, { useEffect, useState } from 'react';
 import { Card } from '../components/Card';
 import { db } from '../services/mockDb';
 import { generateHRInsights } from '../services/geminiService';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { AttendanceType, LeaveStatus } from '../types';
 
 export const AdminDashboard: React.FC = () => {
   const [insight, setInsight] = useState<string>('กำลังวิเคราะห์ข้อมูลโดย AI...');
   const [loadingAI, setLoadingAI] = useState(true);
+  
+  // State for Charts
+  const [deptStats, setDeptStats] = useState<any[]>([]);
+  const [dailyStats, setDailyStats] = useState<any[]>([]);
+  const [summary, setSummary] = useState({
+    presentTotal: 0,
+    late: 0,
+    leave: 0,
+    total: 0
+  });
 
-  // Mock stats for chart
-  const data = [
-    { name: 'IT', present: 20, absent: 2, late: 1 },
-    { name: 'HR', present: 5, absent: 0, late: 0 },
-    { name: 'Sales', present: 15, absent: 3, late: 4 },
-    { name: 'Marketing', present: 10, absent: 1, late: 2 },
-  ];
-
-  const pieData = [
-    { name: 'มาปกติ', value: 400 },
-    { name: 'สาย', value: 30 },
-    { name: 'ลา', value: 20 },
-    { name: 'ขาด', value: 10 },
-  ];
-
-  const COLORS = ['#FFB347', '#FF9E6F', '#FFD1A9', '#E0E0E0'];
+  const COLORS = ['#FFB347', '#FF9E6F', '#60A5FA', '#E0E0E0']; // Matches Pie Chart order
 
   useEffect(() => {
-    const fetchInsight = async () => {
-      // In a real scenario, check if API Key exists before calling
-      if (!process.env.API_KEY) {
-          setInsight("ไม่พบ Gemini API Key กรุณาตั้งค่า .env เพื่อใช้งาน AI");
-          setLoadingAI(false);
-          return;
-      }
-      const text = await generateHRInsights();
-      setInsight(text);
-      setLoadingAI(false);
-    };
+    calculateStats();
     fetchInsight();
   }, []);
+
+  const calculateStats = () => {
+    const employees = db.getEmployees();
+    const attendance = db.getAllAttendance();
+    const leaves = db.getLeaves();
+    const todayStr = new Date().toDateString();
+
+    // 1. Get Approved Leaves for Today
+    const activeLeaves = leaves.filter(l => {
+      const start = new Date(l.startDate);
+      const end = new Date(l.endDate);
+      const today = new Date();
+      // Normalize times for comparison if needed, but simple date comparison often suffices for day granularity
+      // Let's ensure strict date coverage
+      start.setHours(0,0,0,0);
+      end.setHours(23,59,59,999);
+      return l.status === LeaveStatus.APPROVED && today >= start && today <= end;
+    });
+
+    // 2. Get Today's Check-ins
+    const todayCheckIns = attendance.filter(a => 
+      new Date(a.timestamp).toDateString() === todayStr && 
+      a.type === AttendanceType.CHECK_IN
+    );
+
+    // 3. Aggregate by Department
+    const departments = Array.from(new Set(employees.map(e => e.department)));
+    
+    const statsByDept = departments.map(dept => {
+      const empInDept = employees.filter(e => e.department === dept);
+      let present = 0;
+      let late = 0;
+      let absent = 0;
+      let leave = 0;
+
+      empInDept.forEach(emp => {
+        // Priority: Leave > Check-in > Absent
+        const isLeave = activeLeaves.find(l => l.employeeId === emp.id);
+        
+        if (isLeave) {
+          leave++;
+        } else {
+          const checkIn = todayCheckIns.find(a => a.employeeId === emp.id);
+          if (checkIn) {
+            const checkInTime = new Date(checkIn.timestamp);
+            // Late rule: > 08:30 AM
+            const isLate = (checkInTime.getHours() * 60 + checkInTime.getMinutes()) > (8 * 60 + 30);
+            if (isLate) {
+              late++;
+            } else {
+              present++;
+            }
+          } else {
+            absent++;
+          }
+        }
+      });
+
+      return { name: dept, present, late, absent, leave };
+    });
+
+    setDeptStats(statsByDept);
+
+    // 4. Calculate Totals
+    const totalPresent = statsByDept.reduce((acc, curr) => acc + curr.present, 0);
+    const totalLate = statsByDept.reduce((acc, curr) => acc + curr.late, 0);
+    const totalLeave = statsByDept.reduce((acc, curr) => acc + curr.leave, 0);
+    const totalAbsent = statsByDept.reduce((acc, curr) => acc + curr.absent, 0);
+
+    setSummary({
+      presentTotal: totalPresent + totalLate, // Present includes late for the big number
+      late: totalLate,
+      leave: totalLeave,
+      total: employees.length
+    });
+
+    setDailyStats([
+      { name: 'มาปกติ', value: totalPresent },
+      { name: 'สาย', value: totalLate },
+      { name: 'ลา', value: totalLeave },
+      { name: 'ขาด/ยังไม่มา', value: totalAbsent },
+    ]);
+  };
+
+  const fetchInsight = async () => {
+    // In a real scenario, check if API Key exists before calling
+    if (!process.env.API_KEY) {
+        setInsight("ไม่พบ Gemini API Key กรุณาตั้งค่า .env เพื่อใช้งาน AI");
+        setLoadingAI(false);
+        return;
+    }
+    const text = await generateHRInsights();
+    setInsight(text);
+    setLoadingAI(false);
+  };
 
   return (
     <div className="space-y-6">
        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card className="bg-orange-500 text-white border-none">
-             <div className="text-3xl font-bold">45</div>
+             <div className="text-3xl font-bold">{summary.presentTotal}</div>
              <div className="text-sm opacity-90">มาทำงานวันนี้</div>
           </Card>
           <Card className="bg-white">
-             <div className="text-3xl font-bold text-pastel-orangeDark">3</div>
+             <div className="text-3xl font-bold text-pastel-orangeDark">{summary.leave}</div>
              <div className="text-sm text-gray-500">ลา</div>
           </Card>
           <Card className="bg-white">
-             <div className="text-3xl font-bold text-red-400">2</div>
+             <div className="text-3xl font-bold text-red-400">{summary.late}</div>
              <div className="text-sm text-gray-500">มาสาย</div>
           </Card>
           <Card className="bg-white">
-             <div className="text-3xl font-bold text-gray-400">50</div>
+             <div className="text-3xl font-bold text-gray-400">{summary.total}</div>
              <div className="text-sm text-gray-500">พนักงานทั้งหมด</div>
           </Card>
        </div>
@@ -86,9 +167,9 @@ export const AdminDashboard: React.FC = () => {
 
        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card title="สถิติการเข้างานรายแผนก">
-             <div className="h-64 w-full">
+             <div className="h-72 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                   <BarChart data={data}>
+                   <BarChart data={deptStats} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
                       <XAxis dataKey="name" tick={{fontSize: 12}} axisLine={false} tickLine={false} />
                       <YAxis hide />
@@ -96,8 +177,10 @@ export const AdminDashboard: React.FC = () => {
                         contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                         cursor={{fill: '#FFF8F3'}}
                       />
-                      <Bar name="มาปกติ" dataKey="present" stackId="a" fill="#FFB347" radius={[0,0,4,4]} />
+                      <Legend verticalAlign="top" height={36}/>
+                      <Bar name="มาปกติ" dataKey="present" stackId="a" fill="#FFB347" radius={[0,0,0,0]} />
                       <Bar name="สาย" dataKey="late" stackId="a" fill="#FF9E6F" />
+                      <Bar name="ลา" dataKey="leave" stackId="a" fill="#60A5FA" />
                       <Bar name="ขาด" dataKey="absent" stackId="a" fill="#E0E0E0" radius={[4,4,0,0]} />
                    </BarChart>
                 </ResponsiveContainer>
@@ -109,7 +192,7 @@ export const AdminDashboard: React.FC = () => {
                 <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                         <Pie
-                            data={pieData}
+                            data={dailyStats}
                             cx="50%"
                             cy="50%"
                             innerRadius={60}
@@ -117,21 +200,14 @@ export const AdminDashboard: React.FC = () => {
                             paddingAngle={5}
                             dataKey="value"
                         >
-                            {pieData.map((entry, index) => (
+                            {dailyStats.map((entry, index) => (
                                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                             ))}
                         </Pie>
                         <Tooltip />
+                        <Legend verticalAlign="bottom" height={36}/>
                     </PieChart>
                 </ResponsiveContainer>
-            </div>
-            <div className="flex justify-center gap-4 text-xs text-gray-500 mt-2">
-                {pieData.map((entry, index) => (
-                    <div key={index} className="flex items-center gap-1">
-                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index] }}></div>
-                        {entry.name}
-                    </div>
-                ))}
             </div>
           </Card>
        </div>

@@ -4,7 +4,10 @@ import { Button } from '../components/Button';
 import { db } from '../services/mockDb';
 import { Employee, AttendanceType, LeaveStatus, LeaveRequest } from '../types';
 import { formatDate, formatTime } from '../services/utils';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { 
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid
+} from 'recharts';
 
 interface AttendanceSummary {
   employee: Employee;
@@ -29,6 +32,7 @@ export const CEODashboard: React.FC = () => {
     absent: 0,
     leave: 0
   });
+  const [weeklyStats, setWeeklyStats] = useState<any[]>([]);
 
   useEffect(() => {
     refreshDashboard();
@@ -38,6 +42,49 @@ export const CEODashboard: React.FC = () => {
   const refreshDashboard = () => {
       loadDailyData();
       loadPendingLeaves();
+      loadWeeklyStats();
+  };
+
+  const loadWeeklyStats = () => {
+    // Simulate 7 days history based on total employees
+    // In a real app, this would query the DB with a date range
+    const employeesCount = db.getEmployees().length;
+    const data = [];
+    const today = new Date();
+    
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        
+        // Randomize stats for demo purposes
+        // Ensure they roughly sum up to total employees
+        const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+        
+        let present, late, leave, absent;
+        
+        if (isWeekend) {
+             present = Math.floor(Math.random() * 2); 
+             late = 0;
+             leave = 0;
+             absent = employeesCount - present; // Everyone else is technically absent/off
+        } else {
+             leave = Math.floor(Math.random() * 3);
+             late = Math.floor(Math.random() * 4);
+             // Ensure reasonable present count
+             const maxPresent = employeesCount - leave - late;
+             present = Math.max(0, maxPresent - Math.floor(Math.random() * 3));
+             absent = employeesCount - present - late - leave;
+        }
+
+        data.push({
+            name: d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }),
+            present,
+            late,
+            leave,
+            absent
+        });
+    }
+    setWeeklyStats(data);
   };
 
   const loadPendingLeaves = () => {
@@ -247,11 +294,40 @@ export const CEODashboard: React.FC = () => {
              )}
           </div>
       </div>
+      
+      {/* Weekly Trend Chart */}
+      <Card title="แนวโน้มการลงเวลา (7 วันล่าสุด)">
+        <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={weeklyStats} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                    <defs>
+                        <linearGradient id="colorPresent" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#4ADE80" stopOpacity={0.8}/>
+                            <stop offset="95%" stopColor="#4ADE80" stopOpacity={0}/>
+                        </linearGradient>
+                        <linearGradient id="colorLate" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#FCD34D" stopOpacity={0.8}/>
+                            <stop offset="95%" stopColor="#FCD34D" stopOpacity={0}/>
+                        </linearGradient>
+                    </defs>
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12}} />
+                    <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12}} />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#eee" />
+                    <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                    <Legend verticalAlign="top" height={36}/>
+                    <Area type="monotone" dataKey="present" name="มาปกติ" stackId="1" stroke="#4ADE80" fill="url(#colorPresent)" />
+                    <Area type="monotone" dataKey="late" name="มาสาย" stackId="1" stroke="#FCD34D" fill="url(#colorLate)" />
+                    <Area type="monotone" dataKey="leave" name="ลา" stackId="1" stroke="#60A5FA" fill="#60A5FA" fillOpacity={0.3} />
+                    <Area type="monotone" dataKey="absent" name="ขาด/วันหยุด" stackId="1" stroke="#F87171" fill="#F87171" fillOpacity={0.1} />
+                </AreaChart>
+            </ResponsiveContainer>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Chart */}
         <div className="lg:col-span-1">
-            <Card title="สัดส่วนการเข้างาน" className="h-full min-h-[300px]">
+            <Card title="สัดส่วนวันนี้" className="h-full min-h-[300px]">
                 <ResponsiveContainer width="100%" height={250}>
                     <PieChart>
                         <Pie
